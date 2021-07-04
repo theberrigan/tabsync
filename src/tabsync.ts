@@ -1,4 +1,4 @@
-
+/*
 const VALUE_PLACEHOLDER = '-';
 const PREFIX_COMMAND = '__TSC:';
 const PREFIX_DATA = '__TSD:';
@@ -14,7 +14,7 @@ const sendMessage = (key, value = VALUE_PLACEHOLDER, cb = null) => {
         setTimeout(() => cb(), 50);
     }
 };
-
+*/
 
 /*
 Гарантировано:
@@ -33,6 +33,7 @@ bounce()
 
 
 */
+/*
 window.isMasterTab = false;
 
 const init = () => {
@@ -118,12 +119,101 @@ const init = () => {
     sendMessage('ACQ_REQ', currentTabId);
 };
 
-window.cnt = () => {
-    window.open(window.location.href, '_blank');
-    window.open(window.location.href, '_blank');
-    window.open(window.location.href, '_blank');
-    window.open(window.location.href, '_blank');
-};
-
 
 /^(interactive|complete)$/.test(document.readyState) ? init() : window.addEventListener('load', init);
+*/
+
+// ---------------------------------
+
+
+export { uuid4 } from './uuid';
+
+export const TABSYNC_SW_SUPPORTED : boolean = !!window.SharedWorker;
+
+export class TabSyncOptions {
+
+}
+
+// https://www.typescriptlang.org/docs/handbook/classes.html#abstract-classes
+export abstract class AbstractTabSync {
+    protected constructor (options? : TabSyncOptions) {
+
+    }
+
+    abstract sync () : AbstractTabSync;
+
+}
+
+export class TabSyncLocalStorage extends AbstractTabSync {
+    constructor (options? : TabSyncOptions) {
+        super(options);
+    }
+
+    sync () : TabSyncLocalStorage {
+
+        return this;
+    }
+
+    static sync (options : TabSyncOptions) : TabSyncLocalStorage {
+        return (new TabSyncLocalStorage(options)).sync();
+    }
+}
+
+export class TabSyncSharedWorker extends AbstractTabSync {
+    private worker : SharedWorker = null;
+
+    constructor (options? : TabSyncOptions) {
+        super(options);
+    }
+
+    private initWorker () : void {
+        this.worker = new SharedWorker('./tabsync.worker', {
+            type: 'module',
+            credentials: 'omit',
+            name: 'tabsync://' + window.location.host
+        });
+
+        this.worker.port.addEventListener('message', e => this.onWorkerMessage(e), false);
+        this.worker.port.start();
+
+        this.worker.port.postMessage({
+            action: 'init',
+            args: {
+                isIFrame: window.self !== window.top
+            }
+        });
+
+        window.addEventListener('unload', () => {
+            this.worker.port.postMessage({ action: 'destroy' });
+            this.worker.port.close();
+        });
+    }
+
+    private onWorkerMessage (e : MessageEvent) : void {
+
+    }
+
+    sync () : TabSyncSharedWorker {
+
+        return this;
+    }
+
+    static sync (options : TabSyncOptions) : TabSyncSharedWorker {
+        return (new TabSyncSharedWorker(options)).sync();
+    }
+}
+
+export const syncTabs = (options? : TabSyncOptions) : AbstractTabSync => {
+    return (TABSYNC_SW_SUPPORTED ? new TabSyncSharedWorker(options) : new TabSyncLocalStorage(options)).sync();
+};
+
+// import TabSyncWorker from 'worker-loader!./tabsync.worker';
+
+/*
+worker.port.postMessage({ a: 1 });
+worker.port.onmessage = function (event : any) {
+    alert(event);
+};
+
+worker.addEventListener('message', function (event : any) {});
+*/
