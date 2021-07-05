@@ -1,4 +1,4 @@
-import { syncTabs, uuid4 } from './tabsync';
+import { TabSync } from './tabsync';
 
 (<any>window).ts = {
      cloneTabs: (n : number = 5) => {
@@ -15,10 +15,7 @@ import { syncTabs, uuid4 } from './tabsync';
 
 // TODO: is ready state unnecessary?
 const init = () => {
-    // const ts = syncTabs();
-    for (let i = 0; i < 10; i++) {
-        console.log(uuid4());
-    }
+    (<any>window).tabSync = new TabSync();
 };
 
 /^(interactive|complete)$/.test(document.readyState) ? init() : window.addEventListener('load', init);

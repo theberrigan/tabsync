@@ -1,20 +1,168 @@
-/*
+import {uuid4} from './uuid';
+
 const VALUE_PLACEHOLDER = '-';
-const PREFIX_COMMAND = '__TSC:';
-const PREFIX_DATA = '__TSD:';
-const PREFIX_COMMAND_LENGTH = PREFIX_COMMAND.length; 
+const PREFIX_COMMON = '~tabsync:';
+const PREFIX_COMMAND = PREFIX_COMMON + 'c:';
+const PREFIX_DATA = PREFIX_COMMON + 'd:';
+const PREFIX_MASTER = PREFIX_DATA + 'master';
 
-const sendMessage = (key, value = VALUE_PLACEHOLDER, cb = null) => {
-    key = PREFIX_COMMAND + key;
+enum Command {
+    Register = '1',
+    RegisterResponse = '2',
+    Unregister = '3',
+    AssignMaster = '4',
+    Custom = 'C',
+}
 
-    window.localStorage.setItem(key, value);
-    window.localStorage.removeItem(key);
+interface TabSyncStorage {
+    getItem (key : string) : string | null;
+    setItem (key : string, value : string) : void;
+    removeItem (key : string) : void;
+}
 
-    if (cb) {
-        setTimeout(() => cb(), 50);
+interface TabSyncOptions {
+    storage? : TabSyncStorage;
+    tabId? : string;
+}
+
+type TabSyncTab = string;
+
+class TabSync {
+    tabs : TabSyncTab[] = [];
+
+    isMaster : boolean = false;
+
+    tabId : string;
+
+    storage : TabSyncStorage;
+
+    constructor (options? : TabSyncOptions) {
+        const defaultOptions : TabSyncOptions = {
+            storage: window.localStorage,
+            tabId: uuid4()
+        };
+
+        options = Object.assign({}, defaultOptions, options || {});
+
+        this.tabId = options.tabId;
+        this.storage = options.storage;
+
+        console.log(this.tabId);
+
+        if (this.storage.getItem(PREFIX_MASTER) === null) {
+            this.storage.setItem(PREFIX_MASTER, this.tabId);
+            this.isMaster = true;
+        }
+
+        window.addEventListener('storage', this.onStorageEvent);
+        window.addEventListener('unload', this.onPageUnload);
+
+        this.sendMessage(Command.Register, this.tabId);
     }
+
+    sendMessage (key, value = VALUE_PLACEHOLDER, callback = null) {
+        key = PREFIX_COMMAND + key;
+
+        this.storage.setItem(key, value);
+        this.storage.removeItem(key);
+
+        if (callback) {
+            setTimeout(() => callback(), 0);
+        }
+    }
+
+    onStorageEvent = (event : StorageEvent) => {
+        const isCommand = event.key.startsWith(PREFIX_COMMAND);
+        const isRemoveEvent = event.newValue === null;
+
+        if (!isCommand || isRemoveEvent) {
+            return;
+        }
+
+        const command = event.key.slice(PREFIX_COMMAND.length);
+
+        switch (command) {
+            case Command.Register: {
+                console.log('Add tab', event);
+                const newTabId = event.newValue;
+
+                if (this.tabs.includes(newTabId)) {
+                    throw new Error(`${ command }: Tab with id '${ newTabId }' already exists in tabs list`);
+                }
+
+                this.tabs.push(newTabId);
+                this.sendMessage(Command.RegisterResponse, newTabId + ':' + this.tabId);
+
+                break;
+            }
+            case Command.RegisterResponse: {
+                const [ reqTabId, resTabId ] = event.newValue.split(':');
+
+                if (reqTabId === this.tabId && this.tabs.includes(resTabId) === false) {
+                    console.log('Add tab response', event);
+                    this.tabs.push(resTabId);
+                }
+
+                break;
+            }
+            case Command.Unregister: {
+                console.log('Unload tab', event);
+                const unloadTabId = event.newValue;
+                const tabIndex = this.tabs.indexOf(unloadTabId);
+
+                if (tabIndex === -1) {
+                    throw new Error(`${ command }: Unloaded tab with id '${ unloadTabId }' is not found`);
+                }
+
+                this.tabs.splice(tabIndex, 1);
+
+                break;
+            }
+            case Command.AssignMaster: {
+                console.log('Set as master', event);
+                const newMasterTabId = event.newValue;
+
+                if (newMasterTabId === this.tabId) {
+                    this.storage.setItem(PREFIX_MASTER, this.tabId);
+                    this.isMaster = true;
+                }
+
+                break;
+            }
+            default: {
+                throw new Error(`Unknown command '${ command }' with value '${ event.newValue }'`);
+            }
+        }
+    }
+
+    onPageUnload = () => {
+        this.sendMessage(Command.Unregister, this.tabId);
+
+        if (this.isMaster) {
+            this.storage.removeItem(PREFIX_MASTER);
+
+            if (this.tabs.length > 0) {
+                this.sendMessage(Command.AssignMaster, this.tabs[0]);
+            }
+        }
+    }
+}
+
+export { TabSync };
+
+/*
+const init = () => {
+    (<any>window).tabSync = new TabSync();
 };
-*/
+
+/^(interactive|complete)$/.test(document.readyState) ? init() : window.addEventListener('load', init);
+ */
+
+
+
+
+// --------------------
+
 
 /*
 Гарантировано:
@@ -22,198 +170,14 @@ const sendMessage = (key, value = VALUE_PLACEHOLDER, cb = null) => {
 - При последовательном вызове методов localStorage.setItem/removeItem сработают оба события, тоже последовательно.
 - ! проверить, все ли ответили, можно по колву известных вкладок
 - Если при загрузке данная вкладка видит, что в LS записан какой-то мастер, но в течение N секунд от него не было ответа на ACQ_REQ, значит, что-то багануло и можно мастер перезаписать.
-- !!! Учесть, что скрипт может работать не только в табах, но и в айфреймах
+- !!! Учесть, что скрипт может работать не только в табах, но и в
 
+- При одновременной перезагрузке вкладок, данная вкладка принимает Register раньше, чем RegisterResponse
+- RegisterResponse возвращается гораздо позже Register, между ними успевает пройти setTimeout
 
 becomeMaster()
 becomeSlave()
 broadcast()
 poll()
 bounce()
-
-
-*/
-/*
-window.isMasterTab = false;
-
-const init = () => {
-    // let isMasterTab = false;
-    const currentTabId = Math.random().toString(36);
-    const tabs = [];
-
-    window.tabs = tabs;
-    window.currentTabId = currentTabId;
-
-    if (window.localStorage.getItem(PREFIX_DATA + 'master') === null) {
-        window.localStorage.setItem(PREFIX_DATA + 'master', currentTabId);
-        isMasterTab = true;
-    }
-
-    window.addEventListener('storage', (event) => {
-        if (!event.key.startsWith(PREFIX_COMMAND) || event.newValue === null) {
-            return;
-        }
-
-        const command = event.key.slice(PREFIX_COMMAND_LENGTH);
-
-        switch (command) {
-            case 'ACQ_REQ': {
-                const reqTabId = event.newValue;
-
-                if (tabs.includes(reqTabId)) {
-                    throw new Error(`${ command }: Tab with id '${ reqTabId }' already exists in tabs list`);
-                }
-
-                tabs.push(reqTabId);
-                sendMessage('ACQ_RES', reqTabId + ':' + currentTabId); 
-
-                break;
-            }
-            case 'ACQ_RES': {
-                const [ reqTabId, resTabId ] = event.newValue.split(':');
-
-                if (reqTabId === currentTabId && tabs.includes(resTabId) === false) {
-                    tabs.push(resTabId);
-                }
-
-                break;
-            }
-            case 'UNL_REQ': {
-                const tabIndex = tabs.indexOf(event.newValue);
-
-                if (tabIndex === -1) {
-                    throw new Error(`${ command }: Unloaded tab with id '${ event.newValue }' is not found`);
-                }
-
-                tabs.splice(tabIndex, 1);
-
-                break;
-            }
-            case 'CH_MSTR_REQ': {
-                if (event.newValue === currentTabId) {
-                    window.localStorage.setItem(PREFIX_DATA + 'master', currentTabId);
-                    isMasterTab = true;
-                }
-
-                break;
-            }
-            default: {
-                throw new Error(`Unknown command '${ command }' with value '${ value }'`);
-            }
-        }
-    });
-
-    window.addEventListener('unload', () => {
-        sendMessage('UNL_REQ', currentTabId);
-
-        if (isMasterTab) {
-            window.localStorage.removeItem(PREFIX_DATA + 'master');
-
-            if (tabs.length > 0) {
-                sendMessage('CH_MSTR_REQ', tabs[0]);
-            }
-        }
-
-    });
-
-    sendMessage('ACQ_REQ', currentTabId);
-};
-
-
-/^(interactive|complete)$/.test(document.readyState) ? init() : window.addEventListener('load', init);
-*/
-
-// ---------------------------------
-
-
-export { uuid4 } from './uuid';
-
-export const TABSYNC_SW_SUPPORTED : boolean = !!window.SharedWorker;
-
-export class TabSyncOptions {
-
-}
-
-// https://www.typescriptlang.org/docs/handbook/classes.html#abstract-classes
-export abstract class AbstractTabSync {
-    protected constructor (options? : TabSyncOptions) {
-
-    }
-
-    abstract sync () : AbstractTabSync;
-
-}
-
-export class TabSyncLocalStorage extends AbstractTabSync {
-    constructor (options? : TabSyncOptions) {
-        super(options);
-    }
-
-    sync () : TabSyncLocalStorage {
-
-        return this;
-    }
-
-    static sync (options : TabSyncOptions) : TabSyncLocalStorage {
-        return (new TabSyncLocalStorage(options)).sync();
-    }
-}
-
-export class TabSyncSharedWorker extends AbstractTabSync {
-    private worker : SharedWorker = null;
-
-    constructor (options? : TabSyncOptions) {
-        super(options);
-    }
-
-    private initWorker () : void {
-        this.worker = new SharedWorker('./tabsync.worker', {
-            type: 'module',
-            credentials: 'omit',
-            name: 'tabsync://' + window.location.host
-        });
-
-        this.worker.port.addEventListener('message', e => this.onWorkerMessage(e), false);
-        this.worker.port.start();
-
-        this.worker.port.postMessage({
-            action: 'init',
-            args: {
-                isIFrame: window.self !== window.top
-            }
-        });
-
-        window.addEventListener('unload', () => {
-            this.worker.port.postMessage({ action: 'destroy' });
-            this.worker.port.close();
-        });
-    }
-
-    private onWorkerMessage (e : MessageEvent) : void {
-
-    }
-
-    sync () : TabSyncSharedWorker {
-
-        return this;
-    }
-
-    static sync (options : TabSyncOptions) : TabSyncSharedWorker {
-        return (new TabSyncSharedWorker(options)).sync();
-    }
-}
-
-export const syncTabs = (options? : TabSyncOptions) : AbstractTabSync => {
-    return (TABSYNC_SW_SUPPORTED ? new TabSyncSharedWorker(options) : new TabSyncLocalStorage(options)).sync();
-};
-
-// import TabSyncWorker from 'worker-loader!./tabsync.worker';
-
-/*
-worker.port.postMessage({ a: 1 });
-worker.port.onmessage = function (event : any) {
-    alert(event);
-};
-
-worker.addEventListener('message', function (event : any) {});
 */
